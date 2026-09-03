@@ -7,6 +7,14 @@ public sealed class ArcKnowledgeOptions
     /// <summary>Document Intelligence endpoint. Key is never stored here — use managed identity.</summary>
     public string DocumentIntelligenceEndpoint { get; set; } = "";
 
+    /// <summary>Azure OpenAI / Foundry endpoint for query embeddings (e.g. text-embedding-3-small).</summary>
+    public string EmbeddingEndpoint { get; set; } = "";
+
+    public string EmbeddingDeployment { get; set; } = "";
+
+    /// <summary>API key for local dev. In Azure, leave empty and use managed identity.</summary>
+    public string EmbeddingApiKey { get; set; } = "";
+
     public bool UseManagedIdentity { get; set; } = true;
 
     /// <summary>Model ids are environment-specific. Defaults are extraction models, not legal rules.</summary>

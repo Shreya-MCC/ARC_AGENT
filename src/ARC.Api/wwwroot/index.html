@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/css/chat.css" />
+  <link rel="stylesheet" href="/css/chat.css?v=2" />
   <link rel="icon" href="/images/loc-logo.svg" type="image/svg+xml" />
 </head>
 <body>
@@ -22,19 +22,18 @@
       </div>
 
       <nav class="sidebar-nav" aria-label="Capabilities">
-        <p class="nav-label">Governed capabilities</p>
+        <p class="nav-label">Available now</p>
         <ul>
-          <li><span class="nav-icon">◆</span> Exposure &amp; risk analysis</li>
-          <li><span class="nav-icon">◆</span> Notice decisions</li>
-          <li><span class="nav-icon">◆</span> Legal eligibility</li>
-          <li><span class="nav-icon">◆</span> Outstanding recovery workflows</li>
+          <li><span class="nav-icon">◆</span> Depot code lookup</li>
+          <li><span class="nav-icon">◆</span> Depot name search</li>
+          <li><span class="nav-icon">◆</span> Region → depot mapping</li>
         </ul>
       </nav>
 
       <section class="session-card">
-        <h2>Active session</h2>
+        <h2>ARC Assistant</h2>
         <dl class="session-summary" id="sessionSummary"></dl>
-        <button type="button" class="btn-ghost" id="resetSession">Start new session</button>
+        <button type="button" class="btn-ghost" id="resetSession">Clear chat</button>
       </section>
 
       <footer class="sidebar-footer">
@@ -56,7 +55,7 @@
           <h2>Conversation</h2>
           <p id="headerStatus">
             <span class="status-dot"></span>
-            Legal outstanding · governed tools
+            ARC Assistant · ready
           </p>
         </div>
       </header>
@@ -89,6 +88,6 @@
       </div>
     </div>
   </div>
-  <script src="/js/chat.js"></script>
+  <script src="/js/chat.js?v=5"></script>
 </body>
 </html>

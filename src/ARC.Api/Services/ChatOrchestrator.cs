@@ -1,273 +1,264 @@
-using System.Text;
-using System.Text.RegularExpressions;
-using ARC.Agents.A1Reconciliation;
-using ARC.Agents.A2RiskPrioritisation;
-using ARC.Agents.A3NoticeDecisioning;
-using ARC.Agents.A4LegalEligibility;
-using ARC.Agents.A8SupervisoryInsight;
-using ARC.Agents.Context;
-using ARC.Agents.Models;
-using ARC.Api.Auth;
-using ARC.Api.DTOs;
-using ARC.Data.Sql;
-using ARC.Domain.ValueObjects;
-
-namespace ARC.Api.Services;
-
-public sealed class ChatOrchestrator
-{
-    private static readonly Regex DealerUrnPattern = new(@"dealer:[\w-]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private readonly ReconciliationAgent _a1;
-    private readonly RiskPrioritisationAgent _a2;
-    private readonly NoticeDecisioningAgent _a3;
-    private readonly LegalEligibilityAgent _a4;
-    private readonly SupervisoryInsightAgent _a8;
-    private readonly IDealerRepository _dealers;
-
-    public ChatOrchestrator(
-        ReconciliationAgent a1,
-        RiskPrioritisationAgent a2,
-        NoticeDecisioningAgent a3,
-        LegalEligibilityAgent a4,
-        SupervisoryInsightAgent a8,
-        IDealerRepository dealers)
-    {
-        _a1 = a1;
-        _a2 = a2;
-        _a3 = a3;
-        _a4 = a4;
-        _a8 = a8;
-        _dealers = dealers;
-    }
-
-    public async Task<ChatMessageResponse> HandleAsync(
-        ChatMessageRequest request,
-        ArcActor actor,
-        CancellationToken cancellationToken)
-    {
-        var message = request.Message.Trim();
-        if (string.IsNullOrWhiteSpace(message))
-            return Reply("Please type a message.", "ARC Assistant");
-
-        if (IsHelp(message))
-            return Reply(BuildHelpText(), "ARC Assistant");
-
-        var dealerUrn = ResolveDealerUrn(message, request.DealerUrn);
-        if (dealerUrn is null)
-        {
-            return Reply(
-                "Please include a dealer URN (for example `dealer:s1`) or set one in chat settings.",
-                "ARC Assistant");
-        }
-
-        var cycleId = string.IsNullOrWhiteSpace(request.CycleId) ? "2026-03-chat" : request.CycleId.Trim();
-        var region = GateAccess.ForcedRegion(actor) ?? request.Region;
-        var context = new AgentContext(
-            DateOnly.FromDateTime(DateTime.UtcNow),
-            cycleId,
-            CorrelationId.New().Value,
-            dealerUrn);
-
-        try
-        {
-            if (IsIntent(message, "exposure", "reconcile", "net", "ledger", "a1"))
-                return await HandleExposureAsync(dealerUrn, context, cancellationToken);
-
-            if (IsIntent(message, "priorit", "tier", "risk", "rank", "a2"))
-                return await HandlePrioritisationAsync(dealerUrn, context, cancellationToken);
-
-            if (IsIntent(message, "notice", "issue", "hold", "reconcile decision", "a3"))
-                return await HandleNoticeAsync(dealerUrn, context, cancellationToken);
-
-            if (IsIntent(message, "legal", "section 138", "s138", "eligibility", "limitation", "a4"))
-                return await HandleLegalAsync(dealerUrn, context, cancellationToken);
-
-            if (IsIntent(message, "insight", "exception", "supervisory", "dashboard", "a8"))
-                return await HandleInsightsAsync(cycleId, region, dealerUrn, question: null, context, cancellationToken);
-
-            return await HandleInsightsAsync(cycleId, region, dealerUrn, message, context, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            return Reply($"Something went wrong: {ex.Message}", "ARC Assistant");
-        }
-    }
-
-    private async Task<ChatMessageResponse> HandleExposureAsync(
-        string dealerUrn,
-        AgentContext context,
-        CancellationToken cancellationToken)
-    {
-        var result = await _a1.RunAsync(new ReconciliationAgentRequest(dealerUrn, context), cancellationToken);
-        var e = result.Facts.Exposure;
-        var text = new StringBuilder()
-            .AppendLine($"Net recoverable exposure for *{dealerUrn}*")
-            .AppendLine($"• Gross open AR: {e.GrossOpenAr.Amount:N2} {e.GrossOpenAr.Currency}")
-            .AppendLine($"• Credits / rebates / returns: {e.UnappliedCreditNotes.Amount:N2} / {e.AccruedSchemeRebates.Amount:N2} / {e.GoodsReturnInTransit.Amount:N2}")
-            .AppendLine($"• *Net exposure: {e.NetRecoverableExposure.Amount:N2} {e.NetRecoverableExposure.Currency}*")
-            .AppendLine($"• Status: {e.Status}")
-            .AppendLine($"• Ledger lines: {result.Facts.LedgerLineCount}")
-            .ToString();
-
-        if (!string.IsNullOrWhiteSpace(result.Explanation))
-            text += "\n" + result.Explanation;
-
-        return Reply(text.Trim(), ReconciliationAgent.Name, result.Facts);
-    }
-
-    private async Task<ChatMessageResponse> HandlePrioritisationAsync(
-        string dealerUrn,
-        AgentContext context,
-        CancellationToken cancellationToken)
-    {
-        var exposure = await _a1.RunAsync(new ReconciliationAgentRequest(dealerUrn, context), cancellationToken);
-        var result = await _a2.RunAsync(new RiskPrioritisationAgentRequest(
-            exposure.Facts.Exposure,
-            HasBouncedSecurityCheque: false,
-            DaysSinceDemandNotice: null,
-            TsiRemarks: null,
-            context), cancellationToken);
-
-        var text = new StringBuilder()
-            .AppendLine($"Recovery tier for *{dealerUrn}*")
-            .AppendLine($"• Tier: *{result.Assessment.Tier}*")
-            .AppendLine($"• Score: {(result.Assessment.Score?.ToString("N2") ?? "n/a")}")
-            .ToString();
-
-        if (!string.IsNullOrWhiteSpace(result.Explanation))
-            text += "\n" + result.Explanation;
-
-        return Reply(text.Trim(), RiskPrioritisationAgent.Name, result.Assessment);
-    }
-
-    private async Task<ChatMessageResponse> HandleNoticeAsync(
-        string dealerUrn,
-        AgentContext context,
-        CancellationToken cancellationToken)
-    {
-        var dealer = await _dealers.GetAsync(new DealerUrn(dealerUrn), cancellationToken)
-            ?? throw new InvalidOperationException($"Dealer '{dealerUrn}' was not found.");
-
-        var exposure = await _a1.RunAsync(new ReconciliationAgentRequest(dealerUrn, context), cancellationToken);
-        var result = await _a3.RunAsync(new NoticeDecisioningAgentRequest(
-            dealer,
-            exposure.Facts.Exposure,
-            OpenDispute: null,
-            ActivePromiseToPay: null,
-            SearchText: null,
-            context), cancellationToken);
-        var verdict = result.Verdict;
-        var text = new StringBuilder()
-            .AppendLine($"Notice recommendation for *{dealerUrn}*")
-            .AppendLine($"• Decision: *{verdict.Decision}*")
-            .AppendLine($"• Requires G1: {(verdict.RequiresDepotManagerGate ? "Yes" : "No")}")
-            .ToString();
-
-        if (!string.IsNullOrWhiteSpace(result.Explanation))
-            text += "\n" + result.Explanation;
-
-        return Reply(text.Trim(), NoticeDecisioningAgent.Name, verdict);
-    }
-
-    private async Task<ChatMessageResponse> HandleLegalAsync(
-        string dealerUrn,
-        AgentContext context,
-        CancellationToken cancellationToken)
-    {
-        var exposure = await _a1.RunAsync(new ReconciliationAgentRequest(dealerUrn, context), cancellationToken);
-        var result = await _a4.RunAsync(new LegalEligibilityAgentRequest(
-            dealerUrn,
-            exposure.Facts.Exposure,
-            DemandNotice: null,
-            context), cancellationToken);
-
-        var text = new StringBuilder()
-            .AppendLine($"Section 138 eligibility for *{dealerUrn}*")
-            .AppendLine($"• Eligible: *{(result.Facts.Eligibility.Eligible ? "Yes" : "No")}*")
-            .AppendLine($"• Clock: {result.Facts.Clock?.Status.ToString() ?? "n/a"}")
-            .AppendLine($"• Alerts: {result.Facts.Alerts.Count}")
-            .ToString();
-
-        if (!result.Facts.Eligibility.Eligible && !string.IsNullOrWhiteSpace(result.Facts.Eligibility.BlockReason))
-            text += "• Reason: " + result.Facts.Eligibility.BlockReason;
-
-        if (!string.IsNullOrWhiteSpace(result.Explanation))
-            text += "\n" + result.Explanation;
-
-        return Reply(text.Trim(), LegalEligibilityAgent.Name, result.Facts);
-    }
-
-    private async Task<ChatMessageResponse> HandleInsightsAsync(
-        string cycleId,
-        string? region,
-        string dealerUrn,
-        string? question,
-        AgentContext context,
-        CancellationToken cancellationToken)
-    {
-        var result = await _a8.RunAsync(new SupervisoryInsightAgentRequest(
-            cycleId,
-            region,
-            dealerUrn,
-            question,
-            PromisesToPay: null,
-            context), cancellationToken);
-
-        var text = new StringBuilder();
-        if (!string.IsNullOrWhiteSpace(question))
-            text.AppendLine($"Answer for *{dealerUrn}*:");
-        else
-            text.AppendLine($"Supervisory snapshot for *{dealerUrn}* (cycle {cycleId})");
-
-        text.AppendLine($"• Exceptions: {result.Insights.Exceptions.Count}");
-        text.AppendLine($"• Dealers in view: {result.Insights.Dealers.Count}");
-
-        foreach (var ex in result.Insights.Exceptions.Take(3))
-            text.AppendLine($"  - {ex.Kind}: {ex.Detail ?? ex.DealerUrn}");
-
-        if (!string.IsNullOrWhiteSpace(result.Explanation))
-            text.AppendLine().Append(result.Explanation);
-
-        return Reply(text.ToString().Trim(), SupervisoryInsightAgent.Name, result.Insights);
-    }
-
-    private static bool IsHelp(string message)
-        => message.Equals("help", StringComparison.OrdinalIgnoreCase)
-           || message.Equals("?", StringComparison.OrdinalIgnoreCase)
-           || message.StartsWith("/help", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsIntent(string message, params string[] keywords)
-        => keywords.Any(k => message.Contains(k, StringComparison.OrdinalIgnoreCase));
-
-    private static string? ResolveDealerUrn(string message, string? requested)
-    {
-        if (!string.IsNullOrWhiteSpace(requested))
-            return requested.Trim();
-
-        var match = DealerUrnPattern.Match(message);
-        return match.Success ? match.Value : null;
-    }
-
-    private static string BuildHelpText() =>
-        """
-        *ARC Assistant* — try:
-        • `exposure for dealer:s1` — net recoverable amount (A1)
-        • `prioritise dealer:s1` — recovery tier (A2)
-        • `notice for dealer:s1` — Issue / Hold / Reconcile (A3)
-        • `legal dealer:s3` — Section 138 eligibility (A4)
-        • `insights dealer:s1` — exceptions queue (A8)
-        • Ask any question with a dealer URN for NLQ
-
-        Shadow mode — no live outbound actions.
-        """;
-
-    private static ChatMessageResponse Reply(string reply, string agent, object? data = null)
-        => new()
-        {
-            Reply = reply,
-            Agent = agent,
-            Timestamp = DateTimeOffset.UtcNow,
-            Data = data
-        };
-}
+using System.Text;
+using System.Text.RegularExpressions;
+using ARC.Api.Auth;
+using ARC.Api.DTOs;
+using ARC.Data.Sql;
+using ARC.Tools.Depot;
+using ARC.Tools.Exceptions;
+
+namespace ARC.Api.Services;
+
+/// <summary>Depot-only chat — answers depot master queries without session setup.</summary>
+public sealed class ChatOrchestrator
+{
+    private static readonly Regex FormatPattern = new(
+        @"\b(?:in|as|show|give|display|present|format)\s+(?:a\s+)?(table|tabular|grid|csv|list)(?:\s+format)?\b"
+        + @"|\b(table|tabular|grid|csv|list)\s+(?:format|view)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private readonly DepotMasterTool _depots;
+
+    public ChatOrchestrator(DepotMasterTool depots) => _depots = depots;
+
+    public async Task<ChatMessageResponse> HandleAsync(
+        ChatMessageRequest request,
+        ArcActor actor,
+        CancellationToken cancellationToken)
+    {
+        _ = actor;
+        var message = request.Message.Trim();
+        if (string.IsNullOrWhiteSpace(message))
+            return Reply("Please type a message.", "ARC Assistant");
+
+        if (IsHelp(message))
+            return Reply(BuildHelpText(), "ARC Assistant");
+
+        var (queryMessage, format) = ExtractFormat(message);
+        var filters = ParseDepotQuery(queryMessage);
+        if (filters.Code is null && filters.Name is null && filters.Region is null && filters.SearchText is null)
+        {
+            return Reply(
+                "I can look up **depot master** data. Try:\n"
+                + "• `006` — depot by code\n"
+                + "• `Howrah` or `WB` — depot by name/state\n"
+                + "• `E1-WB` or `C1` — depots in a region\n"
+                + "• `WB depots in table format` — tabular results\n\n"
+                + "Type **help** for more examples.",
+                "ARC Assistant");
+        }
+
+        try
+        {
+            var result = await _depots.SearchAsync(
+                new SearchDepotMasterRequest(filters.Code, filters.Name, filters.Region, filters.SearchText, null),
+                cancellationToken);
+
+            if (result.Count == 0)
+            {
+                return Reply(
+                    "No depots matched your search. Try a different code, name, or region.",
+                    DepotMasterTool.Name,
+                    data: result);
+            }
+
+            var (reply, replyFormat) = DepotResponseFormatter.Format(result.Depots, format);
+            return Reply(reply, DepotMasterTool.Name, replyFormat, result);
+        }
+        catch (ToolException ex)
+        {
+            return Reply(ex.Message, DepotMasterTool.Name);
+        }
+        catch (Exception ex)
+        {
+            return Reply($"Something went wrong: {ex.Message}", "ARC Assistant");
+        }
+    }
+
+    private sealed record DepotSearchFilters(
+        string? Code,
+        string? Name,
+        string? Region,
+        string? SearchText);
+
+    private static (string Query, DepotReplyFormat Format) ExtractFormat(string message)
+    {
+        DepotReplyFormat format = DepotReplyFormat.List;
+        var query = message;
+
+        var match = FormatPattern.Match(message);
+        if (match.Success)
+        {
+            var token = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
+            format = token.ToLowerInvariant() switch
+            {
+                "table" or "tabular" => DepotReplyFormat.Table,
+                "grid" => DepotReplyFormat.Grid,
+                "csv" => DepotReplyFormat.Csv,
+                _ => DepotReplyFormat.List
+            };
+            query = FormatPattern.Replace(message, " ").Trim();
+        }
+
+        return (query, format);
+    }
+
+    private static DepotSearchFilters ParseDepotQuery(string message)
+    {
+        var code = ExtractDepotCode(message);
+        if (code is not null)
+            return new DepotSearchFilters(code, null, null, null);
+
+        var region = ExtractRegion(message);
+        if (region is not null)
+            return new DepotSearchFilters(null, null, region, null);
+
+        if (ContainsRegionOrStateIntent(message))
+            return new DepotSearchFilters(null, null, null, ResolveSearchText(ExtractSearchText(message)));
+
+        var name = ExtractDepotName(message);
+        if (name is not null)
+            return new DepotSearchFilters(null, ResolveSearchText(name), null, null);
+
+        return new DepotSearchFilters(null, null, null, ResolveSearchText(ExtractSearchText(message)));
+    }
+
+    private static string? ResolveSearchText(string? text) => DepotQueryAliases.Resolve(text);
+
+    private static bool ContainsRegionOrStateIntent(string message)
+        => Regex.IsMatch(message, @"\b(region|state)\b", RegexOptions.IgnoreCase);
+
+    private static string? ExtractSearchText(string message)
+    {
+        var text = message.Trim().TrimEnd('?', '.', '!');
+
+        var beforeRegion = Regex.Match(text, @"^(.+?)\s+region(?:\s+depot|\s+names?)?\s*$", RegexOptions.IgnoreCase);
+        if (beforeRegion.Success)
+            text = beforeRegion.Groups[1].Value.Trim();
+
+        text = Regex.Replace(
+            text,
+            @"\b(what|is|are|the|all|list|show|find|search|tell|me|give|names?|depots?|under|in|from|of|for|please|about)\b",
+            " ",
+            RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\b(region|state)\b", " ", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\s+", " ").Trim();
+
+        return string.IsNullOrWhiteSpace(text) ? null : text;
+    }
+
+    private static string? ExtractRegion(string message)
+    {
+        var full = Regex.Match(message, @"\b([ENCW]\d-[A-Z]{2}(?:-[A-Z]+)?)\b", RegexOptions.IgnoreCase);
+        if (full.Success)
+            return full.Groups[1].Value.ToUpperInvariant();
+
+        string[] partialPatterns =
+        [
+            @"(?:under|in|from)\s+([ENCW]\d)\b",
+            @"\b([ENCW]\d)\s+region\b",
+            @"region\s+([ENCW]\d)\b",
+            @"\b([ENCW]\d)\s+depot",
+            @"^([ENCW]\d)\b"
+        ];
+
+        foreach (var pattern in partialPatterns)
+        {
+            var match = Regex.Match(message, pattern, RegexOptions.IgnoreCase);
+            if (match.Success)
+                return match.Groups[1].Value.ToUpperInvariant();
+        }
+
+        var afterRegion = Regex.Match(message, @"region\s+([ENCW]\d(?:-[A-Z0-9-]+)?)\b", RegexOptions.IgnoreCase);
+        if (afterRegion.Success)
+            return afterRegion.Groups[1].Value.ToUpperInvariant();
+
+        var underFull = Regex.Match(message, @"(?:under|in)\s+([ENCW]\d-[A-Z0-9-]+)", RegexOptions.IgnoreCase);
+        if (underFull.Success)
+            return underFull.Groups[1].Value.ToUpperInvariant();
+
+        return null;
+    }
+
+    private static string? ExtractDepotCode(string message)
+    {
+        string[] patterns =
+        [
+            @"(?:depot|code)\s+(?:name\s+)?(?:of|for)\s+(\d{2,4})\b",
+            @"(?:depot|code)\s+(\d{2,4})\b",
+            @"\b(?:of|for)\s+(\d{2,4})\b",
+            @"^(\d{2,4})\b",
+            @"\b(\d{2,4})\b"
+        ];
+
+        foreach (var pattern in patterns)
+        {
+            var match = Regex.Match(message, pattern, RegexOptions.IgnoreCase);
+            if (match.Success)
+                return match.Groups[1].Value;
+        }
+
+        return null;
+    }
+
+    private static string? ExtractDepotName(string message)
+    {
+        string[] patterns =
+        [
+            @"depot\s+name\s+(?:of|for)?\s*([A-Za-z][\w\s-]+?)[\?\.]?\s*$",
+            @"name\s+(?:of\s+)?(?:the\s+)?depot\s+([A-Za-z][\w\s-]+?)[\?\.]?\s*$",
+            @"(?:find|search|show|which)\s+(.+?)\s+depot\b",
+            @"^([A-Za-z][\w\s-]+?)\s+depot\b",
+            @"depot\s+([A-Za-z][\w\s-]+?)[\?\.]?\s*$"
+        ];
+
+        foreach (var pattern in patterns)
+        {
+            var match = Regex.Match(message, pattern, RegexOptions.IgnoreCase);
+            if (!match.Success)
+                continue;
+
+            var name = match.Groups[1].Value.Trim();
+            if (!Regex.IsMatch(name, @"^\d+$")
+                && !name.StartsWith("of ", StringComparison.OrdinalIgnoreCase)
+                && !name.StartsWith("for ", StringComparison.OrdinalIgnoreCase))
+            {
+                return name;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsHelp(string message)
+        => message.Equals("help", StringComparison.OrdinalIgnoreCase)
+           || message.Equals("?", StringComparison.OrdinalIgnoreCase)
+           || message.StartsWith("/help", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildHelpText() =>
+        """
+        *ARC Assistant* — ask about depots directly, no session setup needed.
+
+        Examples:
+        • `006` or `what is the depot name of 006?`
+        • `Howrah` or `WB` / `West Bengal`
+        • `E1-WB` or `what depots are under C1?`
+        • `WB depots in table format` — tabular grid
+        • `list west bengal as grid` — card layout
+        • `E1-WB as csv` — comma-separated export
+        """;
+
+    private static ChatMessageResponse Reply(
+        string reply,
+        string agent,
+        string replyFormat = "text",
+        object? data = null)
+        => new()
+        {
+            Reply = reply,
+            Agent = agent,
+            Timestamp = DateTimeOffset.UtcNow,
+            ReplyFormat = replyFormat,
+            Data = data
+        };
+}
+

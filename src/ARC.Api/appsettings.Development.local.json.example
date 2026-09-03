@@ -17,5 +17,11 @@
       "ConnectionString": "",
       "UseManagedIdentity": false
     }
+  },
+  "ArcKnowledge": {
+    "EmbeddingEndpoint": "https://mcc-arc-foundry.services.ai.azure.com",
+    "EmbeddingDeployment": "text-embedding-3-small",
+    "EmbeddingApiKey": "YOUR_EMBEDDING_API_KEY",
+    "UseManagedIdentity": false
   }
 }

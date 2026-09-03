@@ -25,6 +25,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ISqlConnectionFactory, SqlConnectionFactory>();
         services.AddSingleton<IDealerRepository, DealerRepository>();
+        services.AddSingleton<IDepotMasterRepository, DepotMasterRepository>();
         services.AddSingleton<ILedgerRepository, LedgerRepository>();
         services.AddSingleton<IChequeRepository, ChequeRepository>();
         services.AddSingleton<IGateDecisionRepository, GateDecisionRepository>();

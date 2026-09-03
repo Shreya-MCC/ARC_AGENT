@@ -13,5 +13,11 @@
     "Blob": {
       "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=YOUR_STORAGE_ACCOUNT;AccountKey=YOUR_STORAGE_KEY;EndpointSuffix=core.windows.net"
     }
+  },
+  "ArcKnowledge": {
+    "EmbeddingEndpoint": "https://mcc-arc-foundry.services.ai.azure.com",
+    "EmbeddingDeployment": "text-embedding-3-small",
+    "EmbeddingApiKey": "YOUR_EMBEDDING_API_KEY",
+    "UseManagedIdentity": false
   }
 }

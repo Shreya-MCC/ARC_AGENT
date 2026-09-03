@@ -44,7 +44,25 @@ builder.Services.AddSingleton<ChatOrchestrator>();
 var app = builder.Build();
 app.UseExceptionHandler();
 app.UseDefaultFiles();
-app.UseStaticFiles();
+if (app.Environment.IsDevelopment())
+{
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        OnPrepareResponse = ctx =>
+        {
+            var path = ctx.Context.Request.Path.Value ?? "";
+            if (path.EndsWith(".js", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+            {
+                ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+            }
+        }
+    });
+}
+else
+{
+    app.UseStaticFiles();
+}
 if (!string.IsNullOrWhiteSpace(apiOptions.JwtAuthority))
 {
     app.UseAuthentication();

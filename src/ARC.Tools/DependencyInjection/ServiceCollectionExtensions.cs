@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using ARC.Domain.Limitation;
 using ARC.Domain.Rules;
+using ARC.Tools.Depot;
 using ARC.Tools.Drafting;
 using ARC.Tools.Evidence;
 using ARC.Tools.Field;
@@ -26,6 +27,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(_ => RuleEngine.CreateDefault(rules));
         services.AddSingleton<ILimitationClockService, LimitationClockService>();
 
+        services.AddSingleton<DepotMasterTool>();
         services.AddSingleton<ReconciliationTool>();
         services.AddSingleton<RiskPrioritisationTool>();
         services.AddSingleton<NoticeDecisionTool>();

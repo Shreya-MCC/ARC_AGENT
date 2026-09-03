@@ -20,17 +20,20 @@ public sealed class KnowledgeRetrievalService : IKnowledgeRetrievalService
 {
     private readonly IGraphTraversal _graph;
     private readonly IVectorSearch _search;
+    private readonly IEmbeddingService _embeddings;
     private readonly ArcKnowledgeOptions _options;
     private readonly ILogger<KnowledgeRetrievalService> _logger;
 
     public KnowledgeRetrievalService(
         IGraphTraversal graph,
         IVectorSearch search,
+        IEmbeddingService embeddings,
         IOptions<ArcKnowledgeOptions> options,
         ILogger<KnowledgeRetrievalService> logger)
     {
         _graph = graph;
         _search = search;
+        _embeddings = embeddings;
         _options = options.Value;
         _logger = logger;
     }
@@ -42,9 +45,13 @@ public sealed class KnowledgeRetrievalService : IKnowledgeRetrievalService
         if (!string.IsNullOrWhiteSpace(query.DealerUrn))
             nodes = await _graph.TraverseDealerAsync(new DealerUrn(query.DealerUrn), cancellationToken);
 
+        var embedding = query.Embedding;
+        if (embedding is null && _embeddings.IsConfigured && !string.IsNullOrWhiteSpace(query.Text))
+            embedding = await _embeddings.EmbedAsync(query.Text, cancellationToken);
+
         var sources = await _search.SearchAsync(
             query.Text,
-            query.Embedding,
+            embedding,
             query.Region,
             query.DocumentCategory,
             query.RequiredVersion,
