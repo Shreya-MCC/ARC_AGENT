@@ -30,6 +30,13 @@ public sealed class CosmosStoreOptions
     public string AuditContainer { get; set; } = "auditEvents";
     public string ConversationContainer { get; set; } = "conversationState";
     public string DocumentsContainer { get; set; } = "documents";
+
+    /// <summary>
+    /// Partition key mode for chat history in knowledgeChunks:
+    /// sessionId (/sessionId) or documentCategory (/documentCategory).
+    /// Chat turns are stored with documentCategory = chat-session and sessionId = the chat session.
+    /// </summary>
+    public string ChatSessionPartitionKey { get; set; } = "documentCategory";
 }
 
 public sealed class BlobStoreOptions

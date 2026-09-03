@@ -39,6 +39,7 @@ builder.Services.AddArcKnowledge(builder.Configuration);
 builder.Services.AddArcTools(builder.Configuration);
 builder.Services.AddArcLlm(builder.Configuration);
 builder.Services.AddArcAgents();
+builder.Services.AddSingleton<ChatSessionStore>();
 builder.Services.AddSingleton<ChatOrchestrator>();
 
 var app = builder.Build();

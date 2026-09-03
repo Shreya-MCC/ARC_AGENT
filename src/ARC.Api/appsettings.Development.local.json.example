@@ -10,8 +10,9 @@
     "Cosmos": {
       "ConnectionString": "AccountEndpoint=https://arc-vector-store.documents.azure.com:443/;AccountKey=YOUR_COSMOS_PRIMARY_KEY;",
       "UseManagedIdentity": false,
-      "DatabaseId": "arc",
-      "DocumentsContainer": "documents"
+      "DatabaseId": "arc-agent-DB",
+      "DocumentsContainer": "knowledgeChunks",
+      "ChatSessionPartitionKey": "documentCategory"
     },
     "Blob": {
       "ConnectionString": "",

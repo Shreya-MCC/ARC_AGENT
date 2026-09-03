@@ -71,6 +71,7 @@ public sealed class CosmosDenseSearch : IDenseSearch
             FROM c
             WHERE IS_DEFINED(c.embedding)
               AND c.status = 'ACTIVE'
+              AND (NOT IS_DEFINED(c.docType) OR (c.docType != 'chatMessage' AND c.docType != 'chatSessionPointer'))
               AND (@category = null OR c.documentCategory = @category)
               AND (@version = null OR c.version = @version)
               AND (@region = null OR NOT IS_DEFINED(c.regionScope) OR ARRAY_CONTAINS(c.regionScope, @region))
@@ -118,6 +119,7 @@ public sealed class CosmosDenseSearch : IDenseSearch
             FROM c
             WHERE IS_DEFINED(c.embedding)
               AND c.status = 'ACTIVE'
+              AND (NOT IS_DEFINED(c.docType) OR (c.docType != 'chatMessage' AND c.docType != 'chatSessionPointer'))
               AND (@category = null OR c.documentCategory = @category)
               AND (@version = null OR c.version = @version)
               AND (@region = null OR NOT IS_DEFINED(c.regionScope) OR ARRAY_CONTAINS(c.regionScope, @region))

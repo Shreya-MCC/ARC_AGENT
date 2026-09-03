@@ -1,7 +1,15 @@
 const APP_NAME = "ARC Assistant";
 
-// Clear any old onboarding session from previous chat versions.
-try { localStorage.removeItem("arc.chat.session"); } catch { /* ignore */ }
+let sessionId = null;
+
+function apiHeaders(json = false) {
+  const headers = {
+    "X-Arc-Upn": "chat@local.dev",
+    "X-Arc-Role": "Legal",
+  };
+  if (json) headers["Content-Type"] = "application/json";
+  return headers;
+}
 
 const chatThread = document.getElementById("chatThread");
 const chatBody = document.getElementById("chatBody");
@@ -40,7 +48,7 @@ function renderMarkdownLite(text) {
     .replace(/\n/g, "<br>");
 }
 
-function appendMessage(text, type, agent = APP_NAME, replyFormat = "text") {
+function appendMessage(text, type, agent = APP_NAME, replyFormat = "text", at = new Date()) {
   const wrap = document.createElement("div");
   wrap.className = `message ${type}`;
 
@@ -60,7 +68,7 @@ function appendMessage(text, type, agent = APP_NAME, replyFormat = "text") {
 
   const meta = document.createElement("span");
   meta.className = "meta";
-  meta.textContent = type === "sent" ? formatTime(new Date()) : `${agent} · ${formatTime(new Date())}`;
+  meta.textContent = type === "sent" ? formatTime(at) : `${agent} · ${formatTime(at)}`;
   bubble.appendChild(meta);
 
   wrap.appendChild(bubble);
@@ -99,11 +107,18 @@ function showQuickReplies() {
   quickReplies.hidden = false;
 }
 
+function setOnlineStatus(note = "") {
+  const suffix = note ? ` · ${note}` : "";
+  headerStatus.innerHTML = `<span class="status-dot"></span>Online · ARC Assistant${suffix}`;
+}
+
 function updateSessionSummary() {
+  const label = sessionId ? `${sessionId.slice(0, 8)}…` : "loading…";
   sessionSummary.innerHTML = `
+    <div><dt>Session</dt><dd title="${escapeHtml(sessionId || "")}">${escapeHtml(label)}</dd></div>
     <div><dt>Mode</dt><dd>Depot lookup</dd></div>
     <div><dt>Source</dt><dd>depot_mstr</dd></div>
-    <div><dt>Setup</dt><dd>Not required</dd></div>
+    <div><dt>History</dt><dd>Cosmos · knowledgeChunks</dd></div>
   `;
 }
 
@@ -118,7 +133,7 @@ function toggleSidebar() {
 }
 
 function showWelcome() {
-  headerStatus.innerHTML = '<span class="status-dot"></span>Online · ARC Assistant';
+  setOnlineStatus();
   messageInput.placeholder = "Type a depot code, name, or region…";
   showQuickReplies();
 
@@ -134,6 +149,38 @@ function showWelcome() {
   }, 700);
 }
 
+function renderHistory(messages) {
+  messages.forEach((item) => {
+    const type = item.role === "user" ? "sent" : "received";
+    const at = item.timestamp ? new Date(item.timestamp) : new Date();
+    appendMessage(
+      item.content,
+      type,
+      item.agent || APP_NAME,
+      item.replyFormat || "text",
+      at
+    );
+  });
+  setOnlineStatus("history restored from Cosmos");
+  showQuickReplies();
+}
+
+async function loadCurrentSession() {
+  try {
+    const response = await fetch("/v1/chat/sessions/current", { headers: apiHeaders() });
+    if (!response.ok) return false;
+    const data = await response.json();
+    sessionId = data.sessionId || null;
+    updateSessionSummary();
+    const messages = data.messages || [];
+    if (messages.length === 0) return false;
+    renderHistory(messages);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function sendApiMessage(text) {
   showTyping();
   sendBtn.disabled = true;
@@ -141,12 +188,8 @@ async function sendApiMessage(text) {
   try {
     const response = await fetch("/v1/chat/messages", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Arc-Upn": "chat@local.dev",
-        "X-Arc-Role": "Legal",
-      },
-      body: JSON.stringify({ message: text }),
+      headers: apiHeaders(true),
+      body: JSON.stringify({ message: text, sessionId }),
     });
 
     hideTyping();
@@ -158,7 +201,19 @@ async function sendApiMessage(text) {
     }
 
     const data = await response.json();
+    if (data.sessionId) {
+      sessionId = data.sessionId;
+      updateSessionSummary();
+    }
     appendMessage(data.reply, "received", data.agent || APP_NAME, data.replyFormat || "text");
+    if (data.historySaved === false) {
+      setOnlineStatus("history not saved");
+      if (data.historyError) {
+        appendMessage(`Chat history was not saved to Cosmos.\n\n${data.historyError}`, "received", "System");
+      }
+    } else {
+      setOnlineStatus("session saved to Cosmos");
+    }
   } catch (error) {
     hideTyping();
     appendMessage(`Network error: ${error.message}`, "received");
@@ -174,9 +229,25 @@ function handleSubmit(text) {
   sendApiMessage(text);
 }
 
-function resetChat() {
+async function resetChat() {
+  try {
+    const response = await fetch("/v1/chat/sessions", {
+      method: "POST",
+      headers: apiHeaders(true),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      sessionId = data.sessionId || null;
+    } else {
+      sessionId = null;
+    }
+  } catch {
+    sessionId = null;
+  }
+
   chatThread.innerHTML = "";
   closeSidebar();
+  updateSessionSummary();
   showWelcome();
 }
 
@@ -193,5 +264,8 @@ chatForm.addEventListener("submit", (event) => {
 });
 
 updateSessionSummary();
-showWelcome();
-messageInput.focus();
+messageInput.placeholder = "Type a depot code, name, or region…";
+loadCurrentSession().then((restored) => {
+  if (!restored) showWelcome();
+  messageInput.focus();
+});

@@ -36,6 +36,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IWorkflowStateRepository, WorkflowStateRepository>();
         services.AddSingleton<IMafCheckpointDocumentStore, MafCheckpointDocumentStore>();
         services.AddSingleton<IConversationStateRepository, ConversationStateRepository>();
+        services.AddSingleton<IChatSessionRepository, ChatSessionRepository>();
         services.AddSingleton<IAuditRepository, AuditRepository>();
 
         services.AddSingleton<IBlobStorageService, BlobStorageService>();

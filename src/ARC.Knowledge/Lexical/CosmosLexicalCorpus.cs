@@ -24,6 +24,7 @@ public sealed class CosmosLexicalCorpus : ILexicalCorpus
                        c.regionScope, c.blobLocation
                 FROM c
                 WHERE c.status = 'ACTIVE'
+                  AND (NOT IS_DEFINED(c.docType) OR (c.docType != 'chatMessage' AND c.docType != 'chatSessionPointer'))
                 """;
 
             var results = new List<IndexedDocument>();
